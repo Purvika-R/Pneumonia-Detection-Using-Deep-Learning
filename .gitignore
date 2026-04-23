@@ -1,0 +1,29 @@
+# =====================
+# Backend (Python)
+# =====================
+venv/
+__pycache__/
+*.pyc
+
+# Model files
+backend/model/*.h5
+
+# Uploads
+backend/uploads/
+
+# Environment variables
+.env
+
+# =====================
+# Frontend (React)
+# =====================
+node_modules/
+build/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
