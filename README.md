@@ -88,7 +88,7 @@ Pneumonia/
 ### 1️⃣ Clone the Repository
 
 ```bash
-cd /Users/kodelaakshay/Documents/programs/Pneumonia
+cd /Users/Purvika R/Downloads/Pneumonia-Detection-Using-Deep-Learning-main/Pneumonia-Detection-Using-Deep-Learning-main
 ```
 
 ### 2️⃣ Setup Environment Variables
