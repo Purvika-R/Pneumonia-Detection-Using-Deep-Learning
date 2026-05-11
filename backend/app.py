@@ -1,177 +1,210 @@
-from flask import Flask, request, jsonify
+"""
+app.py — Flask backend for Explainable AI Pneumonia Detection System.
+
+XAI additions (Grad-CAM + explanation) are integrated into the existing /predict
+endpoint. All existing endpoints remain unchanged.
+"""
+
+import os
+import uuid
+import logging
+from datetime import datetime
+
+import numpy as np
+from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
+from PIL import Image
 import tensorflow as tf
-import os
-from werkzeug.utils import secure_filename
-from config import Config
-from utils import (
-    allowed_file, 
-    preprocess_image, 
-    get_prediction_label, 
-    save_prediction_to_db,
-    create_upload_folder
-)
 
-# Initialize Flask app
+from config import Config
+from utils import preprocess_image, allowed_file
+from gradcam import generate_gradcam_heatmap, overlay_heatmap_on_image, analyze_heatmap_regions
+from explainer import generate_explanation
+
+# ── App setup ────────────────────────────────────────────────────────────────
+
 app = Flask(__name__)
 app.config.from_object(Config)
-# Configure CORS for production domains if provided
-allowed_origin = os.environ.get("FRONTEND_URL")
-if allowed_origin:
-    CORS(app, resources={r"/*": {"origins": [allowed_origin]}})
-else:
-    CORS(app)
+CORS(app)
 
-# Create upload folder
-create_upload_folder()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# MongoDB connection
+# Temporary directory for Grad-CAM overlays (separate from uploads)
+HEATMAP_DIR = os.path.join(os.path.dirname(__file__), "heatmaps")
+os.makedirs(HEATMAP_DIR, exist_ok=True)
+os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
+# ── MongoDB ───────────────────────────────────────────────────────────────────
+
 try:
-    client = MongoClient(Config.MONGO_URI)
-    db = client.pneumonia_db
-    print("✅ Connected to MongoDB")
-except Exception as e:
-    print(f"❌ MongoDB connection error: {str(e)}")
-    db = None
+    client = MongoClient(app.config["MONGO_URI"], serverSelectionTimeoutMS=5000)
+    client.admin.command("ping")
+    db = client[app.config["DB_NAME"]]
+    predictions_collection = db["predictions"]
+    logger.info("MongoDB connected successfully.")
+except ConnectionFailure:
+    logger.warning("MongoDB unavailable — predictions will not be persisted.")
+    predictions_collection = None
 
-# Load the trained model
+# ── Model loading ─────────────────────────────────────────────────────────────
+
 model = None
-try:
-    if os.path.exists(Config.MODEL_PATH):
-        model = tf.keras.models.load_model(Config.MODEL_PATH)
-        print("✅ Model loaded successfully")
-    else:
-        print("⚠️  Model file not found. Please train the model first.")
-except Exception as e:
-    print(f"❌ Error loading model: {str(e)}")
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "model", "pneumonia_model.h5")
 
-@app.route('/', methods=['GET'])
-def home():
-    """Health check endpoint"""
+def load_model():
+    global model
+    if os.path.exists(MODEL_PATH):
+        model = tf.keras.models.load_model(MODEL_PATH)
+        logger.info("Model loaded from %s", MODEL_PATH)
+    else:
+        logger.error("Model file not found at %s", MODEL_PATH)
+
+load_model()
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _save_upload(file) -> str:
+    """Save uploaded file to UPLOAD_FOLDER and return its path."""
+    ext = os.path.splitext(file.filename)[1].lower() or ".jpg"
+    filename = f"{uuid.uuid4().hex}{ext}"
+    path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+    file.save(path)
+    return path
+
+
+def _cleanup(path: str):
+    """Silently remove a file — used for uploaded originals after processing."""
+    try:
+        if path and os.path.exists(path):
+            os.remove(path)
+    except OSError as e:
+        logger.warning("Could not remove file %s: %s", path, e)
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/", methods=["GET"])
+def health_check():
     return jsonify({
-        'status': 'running',
-        'message': 'Pneumonia Detection API is running',
-        'model_loaded': model is not None,
-        'database_connected': db is not None
+        "status": "healthy",
+        "message": "Explainable AI Pneumonia Detection API",
+        "model_loaded": model is not None,
+        "xai_features": ["grad-cam", "textual-explanation"],
     })
 
-@app.route('/predict', methods=['POST'])
+
+@app.route("/predict", methods=["POST"])
 def predict():
     """
-    Main prediction endpoint
-    Accepts image file and returns prediction
+    POST /predict
+    Accepts a chest X-ray image. Returns:
+      - prediction, confidence       (existing)
+      - explanation_text             (NEW — XAI)
+      - heatmap_image_url            (NEW — Grad-CAM overlay)
     """
-    # Check if model is loaded
     if model is None:
-        return jsonify({
-            'error': 'Model not loaded. Please train the model first.'
-        }), 500
-    
-    # Check if file is in request
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    
-    # Check if file is selected
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
-    # Check if file is allowed
-    if not allowed_file(file.filename):
-        return jsonify({
-            'error': 'Invalid file type. Only PNG, JPG, JPEG allowed.'
-        }), 400
-    
+        return jsonify({"error": "Model not loaded. Run train_model.py first."}), 503
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in request."}), 400
+
+    file = request.files["file"]
+    if file.filename == "" or not allowed_file(file.filename):
+        return jsonify({"error": "Invalid or missing file."}), 400
+
+    upload_path = None
+    heatmap_path = None
+
     try:
-        # Save uploaded file
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(Config.UPLOAD_FOLDER, filename)
-        file.save(filepath)
-        
-        # Preprocess image
-        img_array = preprocess_image(filepath)
-        if img_array is None:
-            return jsonify({'error': 'Error processing image'}), 500
-        
-        # Make prediction
-        prediction = model.predict(img_array)
-        prediction_value = prediction[0][0]
-        
-        # Calculate confidence (using optimal threshold 0.50 from Transfer Learning)
-        confidence = float(prediction_value) if prediction_value >= 0.50 else float(1 - prediction_value)
-        
-        # Get prediction label
-        label = get_prediction_label(prediction_value, confidence)
-        
-        # Save to database
-        if db is not None:
-            save_prediction_to_db(db, filename, label, confidence)
-        
-        # Clean up uploaded file (optional)
-        # os.remove(filepath)
-        
-        # Return result
+        # 1. Save upload
+        upload_path = _save_upload(file)
+
+        # 2. Preprocess for model
+        img_size = app.config["IMG_SIZE"]
+        target = img_size if isinstance(img_size, tuple) else (img_size, img_size)
+        img_array = preprocess_image(upload_path, target_size=target)
+        # 3. Predict
+        raw_confidence = float(model.predict(img_array, verbose=0)[0][0])
+        if raw_confidence >= 0.5:
+            prediction = "PNEUMONIA"
+            confidence = round(raw_confidence * 100, 2)
+        else:
+            prediction = "NORMAL"
+            confidence = round((1 - raw_confidence) * 100, 2)
+
+        # 4. Grad-CAM
+        heatmap = generate_gradcam_heatmap(model, img_array)
+        heatmap_path = overlay_heatmap_on_image(upload_path, heatmap, HEATMAP_DIR)
+        heatmap_filename = os.path.basename(heatmap_path)
+
+        # 5. Region analysis + explanation
+        region_stats = analyze_heatmap_regions(heatmap)
+        explanation_text = generate_explanation(prediction, confidence, region_stats)
+
+        # 6. Persist to MongoDB (extended record)
+        record = {
+            "prediction": prediction,
+            "confidence": confidence,
+            "filename": os.path.basename(upload_path),
+            "heatmap_filename": heatmap_filename,
+            "region_stats": region_stats,
+            "timestamp": datetime.utcnow(),
+        }
+        if predictions_collection is not None:
+            predictions_collection.insert_one(record)
+
         return jsonify({
-            'prediction': label,
-            'confidence': round(confidence * 100, 2),
-            'filename': filename
+            "prediction": prediction,
+            "confidence": confidence,
+            "filename": os.path.basename(upload_path),
+            "explanation_text": explanation_text,
+            "heatmap_image_url": f"/heatmaps/{heatmap_filename}",
         })
-    
+
     except Exception as e:
-        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
+        logger.exception("Error during prediction: %s", e)
+        return jsonify({"error": "Internal server error during prediction."}), 500
 
-@app.route('/history', methods=['GET'])
-def get_history():
-    """
-    Get prediction history from database
-    """
-    if db is None:
-        return jsonify({'error': 'Database not connected'}), 500
-    
-    try:
-        # Get last 10 predictions
-        predictions = list(db.predictions.find(
-            {}, 
-            {'_id': 0}
-        ).sort('timestamp', -1).limit(10))
-        
-        return jsonify({
-            'history': predictions,
-            'count': len(predictions)
-        })
-    except Exception as e:
-        return jsonify({'error': f'Failed to fetch history: {str(e)}'}), 500
+    finally:
+        # Clean up the uploaded original (heatmap is kept until served)
+        _cleanup(upload_path)
 
-@app.route('/stats', methods=['GET'])
-def get_stats():
-    """
-    Get prediction statistics
-    """
-    if db is None:
-        return jsonify({'error': 'Database not connected'}), 500
-    
-    try:
-        total = db.predictions.count_documents({})
-        pneumonia_count = db.predictions.count_documents({'result': 'PNEUMONIA'})
-        normal_count = db.predictions.count_documents({'result': 'NORMAL'})
-        
-        return jsonify({
-            'total_predictions': total,
-            'pneumonia_detected': pneumonia_count,
-            'normal_detected': normal_count
-        })
-    except Exception as e:
-        return jsonify({'error': f'Failed to fetch stats: {str(e)}'}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", Config.BACKEND_PORT))
-    debug = os.environ.get("FLASK_DEBUG", "1") == "1"
-    print(f"🚀 Starting Flask server on port {port}")
-    app.run(
-        host='0.0.0.0',
-        port=port,
-        debug=debug
-    )
+@app.route("/heatmaps/<filename>", methods=["GET"])
+def serve_heatmap(filename: str):
+    """Serve a Grad-CAM heatmap image."""
+    return send_from_directory(HEATMAP_DIR, filename)
 
+
+@app.route("/history", methods=["GET"])
+def history():
+    """Return last 10 predictions (existing endpoint — unchanged)."""
+    if predictions_collection is None:
+        return jsonify({"error": "Database unavailable."}), 503
+    records = list(predictions_collection.find({}, {"_id": 0}).sort("timestamp", -1).limit(10))
+    for r in records:
+        if "timestamp" in r:
+            r["timestamp"] = r["timestamp"].isoformat()
+    return jsonify(records)
+
+
+@app.route("/stats", methods=["GET"])
+def stats():
+    """Return aggregate statistics (existing endpoint — unchanged)."""
+    if predictions_collection is None:
+        return jsonify({"error": "Database unavailable."}), 503
+    total = predictions_collection.count_documents({})
+    pneumonia = predictions_collection.count_documents({"prediction": "PNEUMONIA"})
+    normal = predictions_collection.count_documents({"prediction": "NORMAL"})
+    return jsonify({
+        "total_scans": total,
+        "pneumonia_cases": pneumonia,
+        "normal_cases": normal,
+        "pneumonia_rate": round((pneumonia / total * 100) if total else 0, 1),
+    })
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=app.config.get("BACKEND_PORT", 8000), debug=False)

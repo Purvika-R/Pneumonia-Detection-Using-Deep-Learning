@@ -1,202 +1,185 @@
-import React from "react";
+// src/components/ResultSection.js
+// Extends the original ResultSection to display Grad-CAM heatmap and
+// AI-generated explanation alongside the existing prediction + confidence.
 
-function ResultSection({ result, error, loading }) {
+import React, { useState } from "react";
+
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+
+// ── Confidence meter (preserved from original) ────────────────────────────────
+function ConfidenceMeter({ confidence, prediction }) {
+  const color =
+    prediction === "PNEUMONIA"
+      ? "bg-red-500"
+      : "bg-green-500";
+
   return (
-    <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
-      <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-        <svg
-          className="w-6 h-6 mr-2 text-green-600"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
-          />
-        </svg>
-        Analysis Result
-      </h2>
-
-      {/* Loading State */}
-      {loading && (
-        <div className="flex flex-col items-center justify-center h-64">
-          <div className="relative">
-            <div className="w-20 h-20 border-4 border-blue-200 rounded-full"></div>
-            <div className="w-20 h-20 border-4 border-blue-600 rounded-full animate-spin border-t-transparent absolute top-0 left-0"></div>
-          </div>
-          <p className="mt-6 text-gray-600 font-medium">
-            Analyzing X-ray image...
-          </p>
-          <p className="mt-2 text-sm text-gray-500">
-            This may take a few seconds
-          </p>
-        </div>
-      )}
-
-      {/* Error State */}
-      {error && !loading && (
-        <div className="flex flex-col items-center justify-center h-64">
-          <div className="bg-red-100 p-4 rounded-full mb-4">
-            <svg
-              className="w-12 h-12 text-red-600"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-          </div>
-          <p className="text-red-600 font-semibold text-lg">Analysis Failed</p>
-          <p className="text-gray-600 text-sm mt-2 text-center">{error}</p>
-        </div>
-      )}
-
-      {/* Result State */}
-      {result && !loading && (
-        <div className="space-y-6">
-          {/* Prediction Badge */}
-          <div
-            className={`p-6 rounded-xl border-2 ${
-              result.prediction === "PNEUMONIA"
-                ? "bg-red-50 border-red-300"
-                : "bg-green-50 border-green-300"
-            }`}
-          >
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-semibold text-gray-600">
-                Prediction:
-              </span>
-              <span
-                className={`px-4 py-2 rounded-full text-lg font-bold ${
-                  result.prediction === "PNEUMONIA"
-                    ? "bg-red-600 text-white"
-                    : "bg-green-600 text-white"
-                }`}
-              >
-                {result.prediction}
-              </span>
-            </div>
-
-            {/* Confidence Bar */}
-            <div className="mt-4">
-              <div className="flex justify-between text-sm mb-2">
-                <span className="font-semibold text-gray-700">Confidence:</span>
-                <span className="font-bold text-gray-900">
-                  {result.confidence}%
-                </span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
-                <div
-                  className={`h-3 rounded-full transition-all duration-500 ${
-                    result.prediction === "PNEUMONIA"
-                      ? "bg-red-600"
-                      : "bg-green-600"
-                  }`}
-                  style={{ width: `${result.confidence}%` }}
-                ></div>
-              </div>
-            </div>
-          </div>
-
-          {/* Details Card */}
-          <div className="bg-gray-50 rounded-xl p-5 space-y-3">
-            <h3 className="font-semibold text-gray-800 mb-3">
-              Analysis Details
-            </h3>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Model:</span>
-              <span className="font-medium text-gray-900">
-                CNN Deep Learning
-              </span>
-            </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Processed:</span>
-              <span className="font-medium text-gray-900">
-                {new Date().toLocaleTimeString()}
-              </span>
-            </div>
-            {result.filename && (
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Filename:</span>
-                <span className="font-medium text-gray-900 truncate ml-2 max-w-[200px]">
-                  {result.filename}
-                </span>
-              </div>
-            )}
-          </div>
-
-          {/* Interpretation */}
-          <div
-            className={`p-5 rounded-xl ${
-              result.prediction === "PNEUMONIA"
-                ? "bg-red-50 border border-red-200"
-                : "bg-green-50 border border-green-200"
-            }`}
-          >
-            <h3 className="font-semibold text-gray-800 mb-2 flex items-center">
-              <svg
-                className="w-5 h-5 mr-2"
-                fill="currentColor"
-                viewBox="0 0 20 20"
-              >
-                <path
-                  fillRule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                  clipRule="evenodd"
-                />
-              </svg>
-              Interpretation
-            </h3>
-            <p className="text-sm text-gray-700">
-              {result.prediction === "PNEUMONIA" ? (
-                <>
-                  The AI model has detected <strong>signs of pneumonia</strong>{" "}
-                  in the X-ray image with {result.confidence}% confidence.
-                  Please consult a medical professional for proper diagnosis and
-                  treatment.
-                </>
-              ) : (
-                <>
-                  The AI model indicates <strong>no signs of pneumonia</strong>{" "}
-                  in the X-ray image with {result.confidence}% confidence.
-                  However, this does not replace professional medical advice.
-                </>
-              )}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Empty State */}
-      {!result && !loading && !error && (
-        <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-          <svg
-            className="w-24 h-24 mb-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-            />
-          </svg>
-          <p className="text-lg font-medium">No results yet</p>
-          <p className="text-sm mt-2">Upload an X-ray image to get started</p>
-        </div>
-      )}
+    <div className="w-full mt-2">
+      <div className="flex justify-between text-sm text-gray-500 mb-1">
+        <span>Confidence</span>
+        <span className="font-semibold">{confidence.toFixed(1)}%</span>
+      </div>
+      <div className="w-full bg-gray-200 rounded-full h-3">
+        <div
+          className={`${color} h-3 rounded-full transition-all duration-700`}
+          style={{ width: `${confidence}%` }}
+        />
+      </div>
     </div>
   );
 }
 
-export default ResultSection;
+// ── Heatmap viewer ────────────────────────────────────────────────────────────
+function HeatmapViewer({ originalSrc, heatmapUrl }) {
+  const [activeTab, setActiveTab] = useState("side-by-side");
+
+  if (!heatmapUrl) return null;
+
+  const fullHeatmapUrl = `${BACKEND_URL}${heatmapUrl}`;
+
+  return (
+    <div className="mt-6">
+      <h3 className="text-lg font-semibold text-gray-700 mb-3 flex items-center gap-2">
+        <span className="text-2xl">🔬</span> Grad-CAM Visualisation
+      </h3>
+
+      {/* Tab switcher */}
+      <div className="flex gap-2 mb-4">
+        {["side-by-side", "original", "heatmap"].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+              activeTab === tab
+                ? "bg-blue-600 text-white"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            {tab === "side-by-side"
+              ? "Side by Side"
+              : tab === "original"
+              ? "Original"
+              : "Heatmap"}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === "side-by-side" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col items-center">
+            <p className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide">
+              Original X-Ray
+            </p>
+            <img
+              src={originalSrc}
+              alt="Original X-Ray"
+              className="w-full rounded-lg object-contain border border-gray-200 shadow-sm bg-black"
+              style={{ maxHeight: 280 }}
+            />
+          </div>
+          <div className="flex flex-col items-center">
+            <p className="text-xs text-gray-500 mb-1 font-medium uppercase tracking-wide">
+              Grad-CAM Overlay
+            </p>
+            <img
+              src={fullHeatmapUrl}
+              alt="Grad-CAM Heatmap Overlay"
+              className="w-full rounded-lg object-contain border border-gray-200 shadow-sm"
+              style={{ maxHeight: 280 }}
+            />
+          </div>
+        </div>
+      )}
+
+      {activeTab === "original" && (
+        <img
+          src={originalSrc}
+          alt="Original X-Ray"
+          className="w-full rounded-lg object-contain border border-gray-200 shadow-sm bg-black"
+          style={{ maxHeight: 400 }}
+        />
+      )}
+
+      {activeTab === "heatmap" && (
+        <img
+          src={fullHeatmapUrl}
+          alt="Grad-CAM Heatmap Overlay"
+          className="w-full rounded-lg object-contain border border-gray-200 shadow-sm"
+          style={{ maxHeight: 400 }}
+        />
+      )}
+
+      {/* Legend */}
+      <div className="flex items-center gap-3 mt-3 text-xs text-gray-500">
+        <span className="font-medium">Activation scale:</span>
+        <div className="flex items-center gap-1">
+          <span className="inline-block w-4 h-3 rounded" style={{ background: "blue" }} />
+          <span>Low</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="inline-block w-4 h-3 rounded" style={{ background: "green" }} />
+          <span>Medium</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <span className="inline-block w-4 h-3 rounded" style={{ background: "red" }} />
+          <span>High</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── AI explanation block ───────────────────────────────────────────────────────
+function ExplanationBlock({ text }) {
+  if (!text) return null;
+  return (
+    <div className="mt-6 p-4 bg-blue-50 border border-blue-100 rounded-xl">
+      <h3 className="text-lg font-semibold text-blue-800 mb-2 flex items-center gap-2">
+        <span className="text-xl">🧠</span> AI Explanation
+      </h3>
+      <p className="text-sm text-blue-900 leading-relaxed">{text}</p>
+      <p className="mt-3 text-xs text-blue-500 italic">
+        ⚠️ For educational purposes only. Not a substitute for professional medical advice.
+      </p>
+    </div>
+  );
+}
+
+// ── Main ResultSection ─────────────────────────────────────────────────────────
+export default function ResultSection({ result, previewSrc }) {
+  if (!result) return null;
+
+  const isPneumonia = result.prediction === "PNEUMONIA";
+
+  return (
+    <div className="bg-white rounded-2xl shadow-lg p-6 mt-6">
+      {/* ── Prediction badge (original design preserved) ── */}
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-xl font-bold text-gray-800">Analysis Result</h2>
+        <span
+          className={`px-4 py-1.5 rounded-full text-sm font-bold tracking-wide ${
+            isPneumonia
+              ? "bg-red-100 text-red-700"
+              : "bg-green-100 text-green-700"
+          }`}
+        >
+          {isPneumonia ? "🫁 PNEUMONIA" : "✅ NORMAL"}
+        </span>
+      </div>
+
+      <ConfidenceMeter
+        confidence={result.confidence}
+        prediction={result.prediction}
+      />
+
+      {/* ── XAI: Heatmap ── */}
+      <HeatmapViewer
+        originalSrc={previewSrc}
+        heatmapUrl={result.heatmap_image_url}
+      />
+
+      {/* ── XAI: Explanation ── */}
+      <ExplanationBlock text={result.explanation_text} />
+    </div>
+  );
+}

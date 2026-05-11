@@ -1,167 +1,130 @@
-import React from "react";
+// src/components/UploadSection.js
+// Preserves the original drag-and-drop upload UI.
+// Additionally passes a local preview URL up to the parent via onPreviewChange
+// so ResultSection can show the original image alongside the heatmap.
 
-function UploadSection({
-  selectedFile,
-  previewUrl,
-  loading,
-  onFileSelect,
-  onUpload,
-  onReset,
-}) {
+import React, { useState, useCallback } from "react";
+import axios from "axios";
+
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8000";
+
+export default function UploadSection({ onResult, onPreviewChange, onLoading }) {
+  const [dragging, setDragging] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [preview, setPreview] = useState(null);
+  const [error, setError] = useState("");
+
+  const handleFile = useCallback(
+    (file) => {
+      if (!file) return;
+      const allowed = ["image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp"];
+      if (!allowed.includes(file.type)) {
+        setError("Please upload a valid image file (JPG, PNG, BMP, WEBP).");
+        return;
+      }
+      setError("");
+      setSelectedFile(file);
+      const url = URL.createObjectURL(file);
+      setPreview(url);
+      onPreviewChange && onPreviewChange(url);
+    },
+    [onPreviewChange]
+  );
+
+  const handleDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      setDragging(false);
+      handleFile(e.dataTransfer.files[0]);
+    },
+    [handleFile]
+  );
+
+  const handleInputChange = (e) => handleFile(e.target.files[0]);
+
+  const handleSubmit = async () => {
+    if (!selectedFile) {
+      setError("Please select an image first.");
+      return;
+    }
+    setError("");
+    onLoading && onLoading(true);
+
+    const formData = new FormData();
+    formData.append("file", selectedFile);
+
+    try {
+      const { data } = await axios.post(`${BACKEND_URL}/predict`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      onResult && onResult(data);
+    } catch (err) {
+      const msg =
+        err.response?.data?.error || "Prediction failed. Is the backend running?";
+      setError(msg);
+      onResult && onResult(null);
+    } finally {
+      onLoading && onLoading(false);
+    }
+  };
+
   return (
-    <div className="bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
-      <h2 className="text-2xl font-bold text-gray-800 mb-6 flex items-center">
-        <svg
-          className="w-6 h-6 mr-2 text-blue-600"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeWidth={2}
-            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+    <div className="bg-white rounded-2xl shadow-lg p-6">
+      <h2 className="text-xl font-bold text-gray-800 mb-4">Upload Chest X-Ray</h2>
+
+      {/* Drop zone */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        className={`relative border-2 border-dashed rounded-xl flex flex-col items-center justify-center p-10 cursor-pointer transition-colors ${
+          dragging ? "border-blue-500 bg-blue-50" : "border-gray-300 bg-gray-50 hover:border-blue-400"
+        }`}
+        onClick={() => document.getElementById("xray-input").click()}
+      >
+        <input
+          id="xray-input"
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleInputChange}
+        />
+
+        {preview ? (
+          <img
+            src={preview}
+            alt="Selected X-Ray"
+            className="max-h-56 rounded-lg object-contain"
           />
-        </svg>
-        Upload X-Ray Image
-      </h2>
-
-      {/* Upload Area */}
-      <div className="mb-6">
-        <label
-          htmlFor="file-upload"
-          className="flex flex-col items-center justify-center w-full h-64 border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:border-blue-500 hover:bg-blue-50 transition-all duration-200"
-        >
-          {previewUrl ? (
-            <img
-              src={previewUrl}
-              alt="Preview"
-              className="max-h-60 rounded-lg object-contain"
-            />
-          ) : (
-            <div className="flex flex-col items-center justify-center pt-5 pb-6">
-              <svg
-                className="w-12 h-12 mb-3 text-gray-400"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                />
-              </svg>
-              <p className="mb-2 text-sm text-gray-500">
-                <span className="font-semibold">Click to upload</span> or drag
-                and drop
-              </p>
-              <p className="text-xs text-gray-500">
-                PNG, JPG or JPEG (MAX. 16MB)
-              </p>
-            </div>
-          )}
-          <input
-            id="file-upload"
-            type="file"
-            className="hidden"
-            accept="image/png, image/jpeg, image/jpg"
-            onChange={onFileSelect}
-            disabled={loading}
-          />
-        </label>
-      </div>
-
-      {selectedFile && (
-        <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-          <p className="text-sm text-gray-700">
-            <span className="font-semibold">Selected:</span> {selectedFile.name}
-          </p>
-          <p className="text-xs text-gray-500 mt-1">
-            Size: {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-          </p>
-        </div>
-      )}
-
-      {/* Action Buttons */}
-      <div className="flex gap-3">
-        <button
-          onClick={onUpload}
-          disabled={!selectedFile || loading}
-          className={`flex-1 py-3 px-6 rounded-xl font-semibold text-white transition-all duration-200 ${
-            !selectedFile || loading
-              ? "bg-gray-300 cursor-not-allowed"
-              : "bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
-          }`}
-        >
-          {loading ? (
-            <span className="flex items-center justify-center">
-              <svg
-                className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
-              Analyzing...
-            </span>
-          ) : (
-            "Analyze X-Ray"
-          )}
-        </button>
-
-        {selectedFile && (
-          <button
-            onClick={onReset}
-            disabled={loading}
-            className="py-3 px-6 rounded-xl font-semibold text-gray-700 bg-gray-200 hover:bg-gray-300 transition-all duration-200 disabled:opacity-50"
-          >
-            Reset
-          </button>
+        ) : (
+          <>
+            <span className="text-5xl mb-3">🫁</span>
+            <p className="text-gray-500 text-sm text-center">
+              Drag & drop an X-ray image here, or{" "}
+              <span className="text-blue-600 font-semibold">browse</span>
+            </p>
+            <p className="text-xs text-gray-400 mt-1">PNG, JPG, BMP, WEBP supported</p>
+          </>
         )}
       </div>
 
-      {/* Info Box */}
-      <div className="mt-6 p-4 bg-gradient-to-r from-amber-50 to-orange-50 rounded-lg border border-amber-200">
-        <div className="flex">
-          <svg
-            className="w-5 h-5 text-amber-600 mr-2 flex-shrink-0 mt-0.5"
-            fill="currentColor"
-            viewBox="0 0 20 20"
-          >
-            <path
-              fillRule="evenodd"
-              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-              clipRule="evenodd"
-            />
-          </svg>
-          <div>
-            <p className="text-sm font-semibold text-amber-900">
-              Important Note
-            </p>
-            <p className="text-xs text-amber-700 mt-1">
-              This tool is for educational purposes only. Always consult a
-              healthcare professional for medical diagnosis.
-            </p>
-          </div>
-        </div>
-      </div>
+      {selectedFile && (
+        <p className="text-xs text-gray-400 mt-2 truncate">
+          📎 {selectedFile.name} ({(selectedFile.size / 1024).toFixed(1)} KB)
+        </p>
+      )}
+
+      {error && (
+        <p className="text-sm text-red-500 mt-2">⚠️ {error}</p>
+      )}
+
+      <button
+        onClick={handleSubmit}
+        disabled={!selectedFile}
+        className="mt-4 w-full py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+      >
+        Analyse X-Ray
+      </button>
     </div>
   );
 }
-
-export default UploadSection;
